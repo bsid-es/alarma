@@ -12,11 +12,6 @@ func TestEventValidate(t *testing.T) {
 		name  string
 		event alarma.Event
 	}{{
-		name: "negative every",
-		event: alarma.Event{
-			Every: -1,
-		},
-	}, {
 		name: "until and count set simultaneously",
 		event: alarma.Event{
 			Every: 1 * time.Minute,
@@ -43,6 +38,8 @@ func TestEventValidate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if err := tt.event.Validate(); err == nil {
 				t.Error("expected error")
+			} else if got, want := alarma.ErrorCode(err), alarma.ErrInvalid; got != want {
+				t.Errorf("wrong error code\ngot:  %s\nwant: %s", got, want)
 			}
 		})
 	}

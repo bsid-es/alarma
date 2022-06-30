@@ -1,7 +1,6 @@
 package alarma
 
 import (
-	"errors"
 	"time"
 )
 
@@ -18,17 +17,15 @@ type Event struct {
 
 func (e *Event) Validate() (err error) {
 	switch {
-	case e.Every < 0:
-		return errors.New("every must be non-negative")
 	case e.Every > 0 && !e.Until.IsZero() && e.Count != 0:
-		return errors.New("until and count are mutually exclusive")
+		return &Error{ErrInvalid, `"until" and "count" are mutually exclusive`}
 	case e.Every > 0 && !e.Until.IsZero() && !e.Until.After(e.At):
-		return errors.New("until must happen after at")
+		return &Error{ErrInvalid, `"until" must happen after "at"`}
 	}
 
 	// Compute when the last instance runs.
 	switch {
-	case e.Every == 0:
+	case e.Every <= 0:
 		e.last = e.At
 
 	case e.Every > 0 && !e.Until.IsZero():
