@@ -15,7 +15,7 @@ type Clock struct {
 	newEvents chan []*alarma.Event
 
 	mu   sync.Mutex
-	subs map[*ClockSubscription]struct{}
+	subs map[chan<- alarma.Alarm]struct{}
 
 	cancel context.CancelFunc
 }
@@ -24,7 +24,7 @@ func NewClock() *Clock {
 	return &Clock{
 		Now:       time.Now,
 		newEvents: make(chan []*alarma.Event, 1),
-		subs:      make(map[*ClockSubscription]struct{}),
+		subs:      make(map[chan<- alarma.Alarm]struct{}),
 		cancel:    func() {},
 	}
 }
@@ -42,42 +42,68 @@ func (c *Clock) Interrupt() error {
 
 var _ alarma.Clock = (*Clock)(nil)
 
-func (c *Clock) Reload(events ...*alarma.Event) {
+func (c *Clock) Reload(ctx context.Context, events ...*alarma.Event) {
 	select {
 	case <-c.newEvents:
 	default:
 	}
-	c.newEvents <- events
+	select {
+	case <-ctx.Done():
+	case c.newEvents <- events:
+	}
 }
 
 const subBufferSize = 16
 
-func (c *Clock) Subscribe(ctx context.Context) alarma.ClockSubscription {
+func (c *Clock) Register(ctx context.Context, h alarma.Handler) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	sub := &ClockSubscription{
-		clock: c,
-		c:     make(chan alarma.ClockAlarm, subBufferSize),
-	}
+	sub := make(chan alarma.Alarm, subBufferSize)
 	c.subs[sub] = struct{}{}
-	return sub
+	go handleAlarm(ctx, h, sub)
+}
+
+func handleAlarm(ctx context.Context, handler alarma.Handler, sub <-chan alarma.Alarm) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+
+		case alarm, ok := <-sub:
+			if !ok {
+				return
+			}
+			handler.HandleAlarm(ctx, alarm)
+		}
+	}
+}
+
+func (c *Clock) RegisterFunc(ctx context.Context, f alarma.HandlerFunc) {
+	c.Register(ctx, alarma.Handler(f))
 }
 
 func (c *Clock) run(ctx context.Context) {
+	defer func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		for sub := range c.subs {
+			delete(c.subs, sub)
+			close(sub)
+		}
+	}()
+
 	var q schedQueue
 
 	timer := time.NewTimer(1<<63 - 1)
-	timer.Stop()
+	defer timer.Stop()
 
 	for {
 		select {
 		case <-ctx.Done(): // Operation was canceled.
-			timer.Stop()
 			return
 
 		case events := <-c.newEvents:
 			// There are new events. Rebuild queue and schedule next event.
-
 			now := c.Now()
 
 			// Rebuild scheduling queue.
@@ -96,7 +122,10 @@ func (c *Clock) run(ctx context.Context) {
 
 			// Schedule next event.
 			if !timer.Stop() {
-				<-timer.C
+				select {
+				case <-timer.C:
+				default:
+				}
 			}
 			if len(q) > 0 {
 				at := q[0].at
@@ -116,7 +145,7 @@ func (c *Clock) run(ctx context.Context) {
 			}
 
 			event := fire.event
-			c.publish(event, at)
+			c.publish(ctx, event, at)
 
 			if next := event.Next(at); !next.IsZero() {
 				// There's another instance to run. Schedule it.
@@ -136,21 +165,19 @@ func (c *Clock) run(ctx context.Context) {
 	}
 }
 
-func (c *Clock) publish(event *alarma.Event, at time.Time) {
+func (c *Clock) publish(ctx context.Context, event *alarma.Event, at time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	alarm := alarma.ClockAlarm{
+	alarm := alarma.Alarm{
 		Event: event.Name,
 		At:    at,
 		Data:  event.Data,
 	}
 	for sub := range c.subs {
 		select {
-		case sub.c <- alarm:
-		default:
-			// Drop subscription.
-			// FIXME(fmrsn): Explain why.
-			sub.close()
+		case <-ctx.Done():
+			return
+		case sub <- alarm:
 		}
 	}
 }
@@ -188,30 +215,4 @@ func (q *schedQueue) Pop() any {
 	old[n-1] = schedQueueEntry{}
 	*q = old[:n-1]
 	return it
-}
-
-var _ alarma.ClockSubscription = (*ClockSubscription)(nil)
-
-type ClockSubscription struct {
-	clock *Clock
-	c     chan alarma.ClockAlarm
-	once  sync.Once
-}
-
-func (sub *ClockSubscription) C() <-chan alarma.ClockAlarm {
-	return sub.c
-}
-
-func (sub *ClockSubscription) Close() error {
-	sub.clock.mu.Lock()
-	defer sub.clock.mu.Unlock()
-	sub.close()
-	return nil
-}
-
-func (sub *ClockSubscription) close() {
-	sub.once.Do(func() {
-		close(sub.c)
-	})
-	delete(sub.clock.subs, sub)
 }

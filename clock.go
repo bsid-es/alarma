@@ -6,23 +6,24 @@ import (
 )
 
 type Clock interface {
-	Reload(...*Event)
-	Subscribe(context.Context) ClockSubscription
+	Reload(ctx context.Context, events ...*Event)
+	Register(ctx context.Context, h Handler)
+	RegisterFunc(ctx context.Context, f HandlerFunc)
 }
 
-type ClockSubscription interface {
-	// C returns a channel. (wat?)
-	//
-	// If the subscriber can't keep up with the events coming from this channel,
-	// Clock unsubscribes it and closes its channel; in this case, the
-	// subscription holder will need to subscribe again.
-	C() <-chan ClockAlarm
-
-	// Close closes the subscription.
-	Close() error
+type Handler interface {
+	HandleAlarm(ctx context.Context, alarm Alarm)
 }
 
-type ClockAlarm struct {
+type HandlerFunc func(context.Context, Alarm)
+
+var _ Handler = (HandlerFunc)(nil)
+
+func (f HandlerFunc) HandleAlarm(ctx context.Context, alarm Alarm) {
+	f(ctx, alarm)
+}
+
+type Alarm struct {
 	Event string         `json:"event"`
 	At    time.Time      `json:"at"`
 	Data  map[string]any `json:"data"`

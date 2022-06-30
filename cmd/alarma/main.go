@@ -2,8 +2,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
+	"log"
 	"time"
 
 	"bsid.es/alarma"
@@ -24,13 +23,9 @@ func main() {
 	if err := e.Validate(); err != nil {
 		panic(err)
 	}
-	b, _ := json.Marshal(&e)
-	fmt.Println(string(b))
 
 	clock := mem.NewClock()
 	clock.Now = now
-
-	logger := mem.NewClockLogger(clock)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
 	defer cancel()
@@ -38,10 +33,11 @@ func main() {
 	clock.Run(ctx)
 	defer clock.Interrupt()
 
-	logger.Run(ctx)
-	defer logger.Interrupt()
+	clock.RegisterFunc(ctx, func(ctx context.Context, alarm alarma.Alarm) {
+		log.Printf("Run %q at %v\n", alarm.Event, alarm.At)
+	})
 
-	clock.Reload(&e)
+	clock.Reload(ctx, &e)
 
 	<-ctx.Done()
 }
