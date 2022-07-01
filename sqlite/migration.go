@@ -20,12 +20,12 @@ func Migrate(conn *sqlite.Conn, fsys fs.FS) (err error) {
 		oldVer = stmt.ColumnInt(0)
 		return nil
 	}); err != nil {
-		return fmt.Errorf("get version: %v", err)
+		return fmt.Errorf("get version: %w", err)
 	}
 
 	scripts, err := fs.Glob(fsys, "*.sql")
 	if err != nil {
-		return fmt.Errorf("list scripts: %v", err)
+		return fmt.Errorf("list scripts: %w", err)
 	}
 	currVer := len(scripts)
 
@@ -44,14 +44,14 @@ func Migrate(conn *sqlite.Conn, fsys fs.FS) (err error) {
 		for i := 0; queries != ""; i++ {
 			stmt, trailingBytes, err := conn.PrepareTransient(queries)
 			if err != nil {
-				return fmt.Errorf("prepare %s, stmt %d: %v", script, i, err)
+				return fmt.Errorf("prepare %s, stmt %d: %w", script, i, err)
 			}
 			usedBytes := len(queries) - trailingBytes
 			queries = queries[usedBytes:]
 			_, err = stmt.Step()
 			stmt.Finalize()
 			if err != nil {
-				return fmt.Errorf("execute %s, stmt %d: %v", script, i, err)
+				return fmt.Errorf("execute %s, stmt %d: %w", script, i, err)
 			}
 			queries = strings.TrimSpace(queries)
 		}
@@ -60,7 +60,7 @@ func Migrate(conn *sqlite.Conn, fsys fs.FS) (err error) {
 
 	newVer := strconv.Itoa(currVer)
 	if err := sqlitex.Exec(conn, "pragma user_version="+newVer, nil); err != nil {
-		return fmt.Errorf("set version: %v", err)
+		return fmt.Errorf("set version: %w", err)
 	}
 
 	return nil
